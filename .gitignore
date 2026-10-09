@@ -1,4 +1,4 @@
-# 编译产物
+# Build outputs
 build/
 .gradle/
 *.iml
@@ -6,18 +6,22 @@ captures/
 .externalNativeBuild/
 .cxx/
 
-# 本机配置（含 SDK 绝对路径，不该公开）
+# Local machine config (contains SDK absolute path)
 local.properties
 
-# IDE 配置：里面会有本机路径、连接的设备地址等信息，整个忽略最安全
+# Signing files (never publish: leaking them lets others sign updates as you)
+keystore/
+*.jks
+*.keystore
+
+# IDE config (contains local paths and connected device addresses)
 .idea/
 
-# 系统文件
-.DS_Store
-Thumbs.db
-
-# ���� AI �������ã�����Ŀ�޹أ����ϴ���
+# Local AI tool config (not part of the project)
 .codex/
 .claude/
 .cursor/
 
+# OS files
+.DS_Store
+Thumbs.db
