@@ -6,8 +6,7 @@
     android:background="@color/purple_500"
     android:orientation="vertical">
 
-    <!-- 自己写的标题栏：它的顶部会被填上"状态栏高度"（见 MainActivity 的 insets 处理），
-         所以紫色能一直铺到屏幕最顶端，不会被内容压住。 -->
+    <!-- 顶部由 MainActivity 填上状态栏高度 -->
     <TextView
         android:id="@+id/titleBar"
         android:layout_width="match_parent"
@@ -34,7 +33,6 @@
             android:orientation="vertical"
             android:padding="20dp">
 
-            <!-- ① 选中的文件状态 -->
             <TextView
                 android:id="@+id/fileStatusText"
                 android:layout_width="match_parent"
@@ -58,7 +56,6 @@
                 android:layout_marginBottom="20dp"
                 android:background="#33808080" />
 
-            <!-- ② 立即加载 -->
             <Button
                 android:id="@+id/loadNowButton"
                 android:layout_width="match_parent"
@@ -89,7 +86,6 @@
                 android:layout_marginBottom="20dp"
                 android:background="#33808080" />
 
-            <!-- ③ 运行环境检测 -->
             <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"

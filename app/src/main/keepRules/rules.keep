@@ -3,5 +3,3 @@
 #
 # For more details, see
 #   https://d.android.com/r/tools/r8/keep-rules
-#
-# 目前没有需要保留的类（本工程不做 Hook，只是用 root 搬文件）。

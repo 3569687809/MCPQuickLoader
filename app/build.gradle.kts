@@ -4,8 +4,8 @@ plugins {
     alias(libs.plugins.android.application)
 }
 
-// release 签名信息从 local.properties 读（那个文件不进版本库，所以密码不会泄露出去）。
-// 别人克隆这个项目时没有这个文件，release 就打不出签名包，但编译不受影响。
+// 签名信息从 local.properties 读（该文件不进版本库）。
+// 没有它时 release 产出未签名包，编译本身不受影响。
 val keystoreProps = Properties().apply {
     val file = rootProject.file("local.properties")
     if (file.exists()) file.inputStream().use { load(it) }
@@ -41,7 +41,6 @@ android {
 
     buildTypes {
         release {
-            // 没有签名配置时就不挂，这样没密钥的人也能跑 assembleRelease（只是产出未签名包）
             if (hasReleaseKeystore) {
                 signingConfig = signingConfigs.getByName("release")
             }
