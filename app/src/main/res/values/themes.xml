@@ -1,0 +1,15 @@
+<resources xmlns:tools="http://schemas.android.com/tools">
+    <!-- 基础主题。用 NoActionBar：顶部标题栏我们在布局里自己写，
+         这样才能配合 MainActivity 里的 insets 处理，正确避开状态栏
+         （Android 15 起对 targetSdk 35+ 强制"边到边"，系统 ActionBar 会压住内容）。 -->
+    <style name="Theme.Z1yrQuickLoader" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <!-- Primary brand color. -->
+        <item name="colorPrimary">@color/purple_500</item>
+        <item name="colorPrimaryVariant">@color/purple_700</item>
+        <item name="colorOnPrimary">@color/white</item>
+        <!-- Secondary brand color. -->
+        <item name="colorSecondary">@color/teal_200</item>
+        <item name="colorSecondaryVariant">@color/teal_700</item>
+        <item name="colorOnSecondary">@color/black</item>
+    </style>
+</resources>

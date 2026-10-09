@@ -1,0 +1,23 @@
+# 编译产物
+build/
+.gradle/
+*.iml
+captures/
+.externalNativeBuild/
+.cxx/
+
+# 本机配置（含 SDK 绝对路径，不该公开）
+local.properties
+
+# IDE 配置：里面会有本机路径、连接的设备地址等信息，整个忽略最安全
+.idea/
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# ���� AI �������ã�����Ŀ�޹أ����ϴ���
+.codex/
+.claude/
+.cursor/
+
