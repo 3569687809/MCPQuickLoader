@@ -2,6 +2,7 @@ package com.z1yr.mcpquickloader
 
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.provider.OpenableColumns
 import android.view.View
@@ -14,8 +15,11 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.updatePadding
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
-// 整体流程与设计说明见 README.md「工作原理」
+// 整体流程见 README.md「工作原理」；本分支额外带诊断日志，见 README 的 debug 一节
 class MainActivity : AppCompatActivity() {
 
     private lateinit var fileStatusText: TextView
@@ -34,6 +38,12 @@ class MainActivity : AppCompatActivity() {
 
     private val recordFile: File
         get() = File(getExternalFilesDir(null) ?: filesDir, "selected_mcp.txt")
+
+    /** 诊断日志，放在外部缓存目录，用户「清除缓存」就能清掉 */
+    private val logFile: File
+        get() = File(externalCacheDir ?: cacheDir, "z1yr-debug.log")
+
+    private val timeFormat = SimpleDateFormat("MM-dd HH:mm:ss", Locale.US)
 
     private val pickFile = registerForActivityResult(
         ActivityResultContracts.OpenDocument()
@@ -61,6 +71,7 @@ class MainActivity : AppCompatActivity() {
         selectedFile = uri
         saveSelection(uri, name)
         fileStatusText.text = "✅ 已选择：$name"
+        appendLog("选中文件: $name  ($uri)")
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -92,8 +103,30 @@ class MainActivity : AppCompatActivity() {
         }
         loadNowButton.setOnClickListener { startLoad() }
 
+        appendLog("")
+        appendLog("===== 启动 ${timeFormat.format(Date())} =====")
+        appendLog("版本 ${appVersion()} | ${Build.MANUFACTURER} ${Build.MODEL} | Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
+
         checkRoot()
     }
+
+    // ---------------------------------------------------------------- 诊断日志
+
+    private fun appendLog(text: String) {
+        try {
+            logFile.parentFile?.mkdirs()
+            logFile.appendText(text + "\n")
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun appVersion(): String = try {
+        packageManager.getPackageInfo(packageName, 0).versionName ?: "?"
+    } catch (_: Exception) {
+        "?"
+    }
+
+    // ---------------------------------------------------------------- 选择记录
 
     private fun saveSelection(uri: Uri, name: String) {
         try {
@@ -113,6 +146,8 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // ---------------------------------------------------------------- 加载流程
+
     private fun startLoad() {
         val uri = selectedFile
         if (uri == null) {
@@ -130,7 +165,7 @@ class MainActivity : AppCompatActivity() {
             val message = try {
                 load(uri)
             } catch (e: Exception) {
-                "加载失败：${e.message}"
+                fail("加载异常：${e.message}")
             }
             runOnUiThread {
                 loadResultText.text = message
@@ -143,32 +178,45 @@ class MainActivity : AppCompatActivity() {
     private fun load(uri: Uri): String {
         val fileName = queryDisplayName(uri)
 
+        appendLog("")
+        appendLog("===== 加载 ${timeFormat.format(Date())} =====")
+        appendLog("文件: $fileName")
+
         // 先落成真实文件：root 的 shell 不认 content://
         val localFile = File(workDir, fileName)
         localFile.parentFile?.mkdirs()
         contentResolver.openInputStream(uri)?.use { input ->
             localFile.outputStream().use { output -> input.copyTo(output) }
-        } ?: return "读取所选文件失败（文件可能已被移动或删除）"
+        } ?: return fail("读取所选文件失败（文件可能已被移动或删除）")
 
-        val output = execAsRootWithProgress(
-            buildLoadScript(localFile.absolutePath, fileName)
-        ) { done, total ->
+        appendLog("落地: ${localFile.absolutePath}  (${localFile.length()} 字节)")
+
+        val script = buildLoadScript(localFile.absolutePath, fileName)
+        appendLog("--- 脚本 ---\n$script")
+
+        val lines = execAsRootWithProgress(script) { done, total ->
             runOnUiThread {
                 if (total > 0) loadProgress.max = total
                 loadProgress.progress = done
                 loadResultText.text = "正在加载 $done / $total …"
             }
         }
+        appendLog("--- shell 输出 ---\n" + lines.joinToString("\n"))
 
+        val result = lines.lastOrNull { it.startsWith("OK|") || it.startsWith("ERR|") }
         return when {
-            output.startsWith("OK|") -> output.removePrefix("OK|")
-            output.startsWith("ERR|") -> output.removePrefix("ERR|")
-            output.isBlank() -> "执行失败：没有拿到 root（Magisk 里给本应用授权了吗？）"
-            else -> "加载失败：$output"
+            result == null -> fail("没有得到 root 的返回结果（Magisk 里授权了吗？）")
+            result.startsWith("OK|") -> result.removePrefix("OK|")
+            else -> fail(result.removePrefix("ERR|"))
         }
     }
 
-    // 要 root；chown / chmod / restorecon 缺一不可，否则游戏读不到（见 README「工作原理」）
+    private fun fail(message: String): String {
+        appendLog("--- 结果 ---\n$message")
+        return "$message\n\n详细日志：\n${logFile.absolutePath}"
+    }
+
+    // 要 root；chown / chmod / restorecon 缺一不可，否则游戏读不到
     private fun buildLoadScript(sourcePath: String, fileName: String): String {
         val src = shellQuote(sourcePath)
         val name = shellQuote(fileName)
@@ -177,7 +225,16 @@ class MainActivity : AppCompatActivity() {
             PACKCACHE=$dir
             SRC=$src
             NAME=$name
-            if [ ! -d "${'$'}PACKCACHE" ]; then echo "ERR|找不到游戏目录：${'$'}PACKCACHE"; exit 1; fi
+            if [ ! -d "${'$'}PACKCACHE" ]; then
+              echo "ERR|找不到游戏目录：${'$'}PACKCACHE"
+              echo "DIAG|id: ${'$'}(id 2>&1)"
+              echo "DIAG|test -d: ${'$'}([ -d "${'$'}PACKCACHE" ] && echo yes || echo no)"
+              echo "DIAG|ls 目标: ${'$'}(ls -ld "${'$'}PACKCACHE" 2>&1)"
+              echo "DIAG|ls 游戏根: ${'$'}(ls -ld /data/user/0/com.netease.x19 2>&1)"
+              echo "DIAG|各用户空间: ${'$'}(ls -d /data/user/*/com.netease.x19 2>&1)"
+              echo "DIAG|mount: ${'$'}(mount | grep -m2 ' /data ' 2>&1)"
+              exit 1
+            fi
 
             TOTAL=0
             for d in "${'$'}PACKCACHE"/*/; do [ -d "${'$'}d" ] && TOTAL=${'$'}((TOTAL+1)); done
@@ -200,23 +257,21 @@ class MainActivity : AppCompatActivity() {
     private fun execAsRootWithProgress(
         script: String,
         onProgress: (done: Int, total: Int) -> Unit
-    ): String {
+    ): List<String> {
         val process = ProcessBuilder("su", "-c", script).redirectErrorStream(true).start()
 
-        var result = ""
+        val allLines = mutableListOf<String>()
         process.inputStream.bufferedReader().forEachLine { line ->
-            when {
-                line.startsWith("PROGRESS|") -> {
-                    val parts = line.split("|")
-                    if (parts.size >= 3) {
-                        onProgress(parts[1].toIntOrNull() ?: 0, parts[2].toIntOrNull() ?: 0)
-                    }
+            allLines += line
+            if (line.startsWith("PROGRESS|")) {
+                val parts = line.split("|")
+                if (parts.size >= 3) {
+                    onProgress(parts[1].toIntOrNull() ?: 0, parts[2].toIntOrNull() ?: 0)
                 }
-                line.startsWith("OK|") || line.startsWith("ERR|") -> result = line
             }
         }
         process.waitFor()
-        return result
+        return allLines
     }
 
     private fun shellQuote(value: String): String =
@@ -224,11 +279,16 @@ class MainActivity : AppCompatActivity() {
 
     private fun checkRoot() {
         Thread {
-            val granted = try {
-                Runtime.getRuntime().exec(arrayOf("su", "-c", "id")).waitFor() == 0
-            } catch (_: Exception) {
-                false
+            val output = try {
+                val process = Runtime.getRuntime().exec(arrayOf("su", "-c", "id"))
+                val text = process.inputStream.bufferedReader().use { it.readText() }.trim()
+                process.waitFor()
+                text
+            } catch (e: Exception) {
+                "异常: ${e.message}"
             }
+            appendLog("root 检查: $output")
+            val granted = output.contains("uid=0")
             runOnUiThread {
                 rootStatusText.text = if (granted) {
                     "Root 权限：已授权 ✅"
