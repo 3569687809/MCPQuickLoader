@@ -101,6 +101,16 @@
                 android:text="Root 权限：检测中…"
                 android:textSize="14sp" />
 
+            <TextView
+                android:id="@+id/storageStatusText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="6dp"
+                android:paddingTop="8dp"
+                android:paddingBottom="8dp"
+                android:text="所有文件访问权限：检测中…"
+                android:textSize="14sp" />
+
         </LinearLayout>
     </ScrollView>
 </LinearLayout>

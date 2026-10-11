@@ -4,7 +4,9 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Environment
 import android.provider.OpenableColumns
+import android.provider.Settings
 import android.view.View
 import android.widget.Button
 import android.widget.ProgressBar
@@ -25,6 +27,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var fileStatusText: TextView
     private lateinit var loadResultText: TextView
     private lateinit var rootStatusText: TextView
+    private lateinit var storageStatusText: TextView
     private lateinit var loadProgress: ProgressBar
     private lateinit var loadNowButton: Button
 
@@ -33,8 +36,11 @@ class MainActivity : AppCompatActivity() {
     /** 有些 root（实测 KernelSU）需要 --mount-master 才能看到别的 App 的数据目录 */
     private var mountMasterSupported = false
 
-    private val packCacheDir =
-        "/data/user/0/com.netease.x19/files/games/com.netease/packcache"
+    /** 游戏缓存目录可能落在内部存储，也可能落在外部存储，两边都试 */
+    private val packCacheCandidates = listOf(
+        "/data/user/0/com.netease.x19/files/games/com.netease/packcache",
+        "/storage/emulated/0/Android/data/com.netease.x19/files/games/com.netease/packcache"
+    )
 
     private val workDir: File
         get() = externalCacheDir ?: cacheDir
@@ -93,8 +99,11 @@ class MainActivity : AppCompatActivity() {
         fileStatusText = findViewById(R.id.fileStatusText)
         loadResultText = findViewById(R.id.loadResultText)
         rootStatusText = findViewById(R.id.rootStatusText)
+        storageStatusText = findViewById(R.id.storageStatusText)
         loadProgress = findViewById(R.id.loadProgress)
         loadNowButton = findViewById(R.id.loadNowButton)
+
+        storageStatusText.setOnClickListener { requestAllFilesAccess() }
 
         loadSelection()?.let { (uri, name) ->
             selectedFile = uri
@@ -111,6 +120,39 @@ class MainActivity : AppCompatActivity() {
         appendLog("版本 ${appVersion()} | ${Build.MANUFACTURER} ${Build.MODEL} | Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
 
         probeRoot()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (::storageStatusText.isInitialized) updateStorageStatus()
+    }
+
+    // ---------------------------------------------------------------- 权限
+
+    /** 「所有文件访问权限」：访问 /storage/emulated/0 下别的应用目录时需要 */
+    private fun updateStorageStatus() {
+        val granted = Build.VERSION.SDK_INT < Build.VERSION_CODES.R ||
+                Environment.isExternalStorageManager()
+        storageStatusText.text = if (granted) {
+            "所有文件访问权限：已授予 ✅"
+        } else {
+            "所有文件访问权限：未授予 ❌（点这里去授权）"
+        }
+        appendLog("所有文件访问权限: ${if (granted) "已授予" else "未授予"}")
+    }
+
+    private fun requestAllFilesAccess() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return
+        try {
+            startActivity(
+                Intent(
+                    Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                    Uri.parse("package:$packageName")
+                )
+            )
+        } catch (_: Exception) {
+            startActivity(Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION))
+        }
     }
 
     // ---------------------------------------------------------------- 诊断日志
@@ -154,14 +196,11 @@ class MainActivity : AppCompatActivity() {
             val masterId = runSu(listOf("su", "--mount-master", "-c", "id"))
             mountMasterSupported = masterId.contains("uid=0")
 
-            val probe = "ls -ld '$packCacheDir' 2>&1"
-            val seePlain = runSu(listOf("su", "-c", probe))
-            val seeMaster = runSu(listOf("su", "--mount-master", "-c", probe))
-
             appendLog("su -c id                → $plainId")
             appendLog("su --mount-master -c id → $masterId")
-            appendLog("su -c 看游戏目录         → $seePlain")
-            appendLog("su --mount-master 看游戏目录 → $seeMaster")
+            packCacheCandidates.forEach { path ->
+                appendLog("su -c 看 $path → ${runSu(listOf("su", "-c", "ls -ld '$path' 2>&1"))}")
+            }
             appendLog("本次采用: ${if (mountMasterSupported) "su --mount-master" else "su"}")
 
             val granted = plainId.contains("uid=0") || masterId.contains("uid=0")
@@ -264,7 +303,7 @@ class MainActivity : AppCompatActivity() {
         appendLog("--- 结果 ---\n$message")
         // 把 shell 的诊断行直接摆到界面上，用户截个图就能反馈
         val diag = try {
-            logFile.readLines().filter { it.startsWith("DIAG|") }.takeLast(6)
+            logFile.readLines().filter { it.startsWith("DIAG|") }.takeLast(8)
         } catch (_: Exception) {
             emptyList()
         }
@@ -276,28 +315,32 @@ class MainActivity : AppCompatActivity() {
     private fun buildLoadScript(sourcePath: String, fileName: String): String {
         val src = shellQuote(sourcePath)
         val name = shellQuote(fileName)
-        val dir = shellQuote(packCacheDir)
+        val candidates = packCacheCandidates.joinToString(" ") { shellQuote(it) }
         return """
-            PACKCACHE=$dir
             SRC=$src
             NAME=$name
+            PACKCACHE=""
 
-            if [ ! -d "${'$'}PACKCACHE" ]; then
-              FOUND=${'$'}(find /data/user -maxdepth 6 -type d -name packcache 2>/dev/null | head -1)
+            for c in $candidates; do
+              if [ -d "${'$'}c" ]; then PACKCACHE="${'$'}c"; echo "DIAG|命中候选路径: ${'$'}c"; break; fi
+            done
+
+            if [ -z "${'$'}PACKCACHE" ]; then
+              FOUND=${'$'}(find /data/user /storage/emulated/0/Android/data -maxdepth 6 -type d -name packcache 2>/dev/null | head -1)
               if [ -n "${'$'}FOUND" ]; then
-                echo "DIAG|自动定位到: ${'$'}FOUND"
                 PACKCACHE="${'$'}FOUND"
+                echo "DIAG|自动定位到: ${'$'}FOUND"
               fi
             fi
 
-            if [ ! -d "${'$'}PACKCACHE" ]; then
-              echo "ERR|找不到游戏目录：${'$'}PACKCACHE"
+            if [ -z "${'$'}PACKCACHE" ]; then
+              echo "ERR|找不到游戏目录"
               echo "DIAG|id: ${'$'}(id 2>&1)"
-              echo "DIAG|test -d: ${'$'}([ -d "${'$'}PACKCACHE" ] && echo yes || echo no)"
-              echo "DIAG|ls 目标: ${'$'}(ls -ld "${'$'}PACKCACHE" 2>&1)"
-              echo "DIAG|ls 游戏根: ${'$'}(ls -ld /data/user/0/com.netease.x19 2>&1)"
+              echo "DIAG|内部路径: ${'$'}(ls -ld '/data/user/0/com.netease.x19' 2>&1)"
+              echo "DIAG|外部路径: ${'$'}(ls -ld '/storage/emulated/0/Android/data/com.netease.x19' 2>&1)"
               echo "DIAG|各用户空间: ${'$'}(ls -d /data/user/*/com.netease.x19 2>&1)"
-              echo "DIAG|data 下含 netease 的目录: ${'$'}(find /data -maxdepth 4 -iname '*netease*' 2>/dev/null | head -5)"
+              echo "DIAG|data 下含 netease: ${'$'}(find /data -maxdepth 4 -iname '*netease*' 2>/dev/null | head -5)"
+              echo "DIAG|外部存储下含 netease: ${'$'}(find /storage/emulated/0/Android/data -maxdepth 3 -iname '*netease*' 2>/dev/null | head -5)"
               exit 1
             fi
 
