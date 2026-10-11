@@ -19,7 +19,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
-// 整体流程见 README.md「工作原理」；本分支额外带诊断日志，见 README 的 debug 一节
+// 整体流程见 README.md「工作原理」；本分支额外带诊断日志
 class MainActivity : AppCompatActivity() {
 
     private lateinit var fileStatusText: TextView
@@ -29,6 +29,9 @@ class MainActivity : AppCompatActivity() {
     private lateinit var loadNowButton: Button
 
     private var selectedFile: Uri? = null
+
+    /** 有些 root（实测 KernelSU）需要 --mount-master 才能看到别的 App 的数据目录 */
+    private var mountMasterSupported = false
 
     private val packCacheDir =
         "/data/user/0/com.netease.x19/files/games/com.netease/packcache"
@@ -107,7 +110,7 @@ class MainActivity : AppCompatActivity() {
         appendLog("===== 启动 ${timeFormat.format(Date())} =====")
         appendLog("版本 ${appVersion()} | ${Build.MANUFACTURER} ${Build.MODEL} | Android ${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})")
 
-        checkRoot()
+        probeRoot()
     }
 
     // ---------------------------------------------------------------- 诊断日志
@@ -124,6 +127,52 @@ class MainActivity : AppCompatActivity() {
         packageManager.getPackageInfo(packageName, 0).versionName ?: "?"
     } catch (_: Exception) {
         "?"
+    }
+
+    // ---------------------------------------------------------------- root 探测
+
+    private fun runSu(args: List<String>): String = try {
+        val process = ProcessBuilder(args).redirectErrorStream(true).start()
+        val text = process.inputStream.bufferedReader().use { it.readText() }.trim()
+        process.waitFor()
+        text
+    } catch (e: Exception) {
+        "异常: ${e.message}"
+    }
+
+    private fun suCommand(script: String): List<String> =
+        if (mountMasterSupported) listOf("su", "--mount-master", "-c", script)
+        else listOf("su", "-c", script)
+
+    /**
+     * 启动时同时探测两种 su 调用方式，并把「能不能看到游戏目录」写进日志。
+     * App 各自跑在不同的挂载命名空间里，某些 root 方案只有 --mount-master 才看得见全局目录。
+     */
+    private fun probeRoot() {
+        Thread {
+            val plainId = runSu(listOf("su", "-c", "id"))
+            val masterId = runSu(listOf("su", "--mount-master", "-c", "id"))
+            mountMasterSupported = masterId.contains("uid=0")
+
+            val probe = "ls -ld '$packCacheDir' 2>&1"
+            val seePlain = runSu(listOf("su", "-c", probe))
+            val seeMaster = runSu(listOf("su", "--mount-master", "-c", probe))
+
+            appendLog("su -c id                → $plainId")
+            appendLog("su --mount-master -c id → $masterId")
+            appendLog("su -c 看游戏目录         → $seePlain")
+            appendLog("su --mount-master 看游戏目录 → $seeMaster")
+            appendLog("本次采用: ${if (mountMasterSupported) "su --mount-master" else "su"}")
+
+            val granted = plainId.contains("uid=0") || masterId.contains("uid=0")
+            runOnUiThread {
+                rootStatusText.text = if (granted) {
+                    "Root 权限：已授权 ✅"
+                } else {
+                    "Root 权限：未授权 ❌（复制到游戏目录需要它）"
+                }
+            }
+        }.start()
     }
 
     // ---------------------------------------------------------------- 选择记录
@@ -232,6 +281,15 @@ class MainActivity : AppCompatActivity() {
             PACKCACHE=$dir
             SRC=$src
             NAME=$name
+
+            if [ ! -d "${'$'}PACKCACHE" ]; then
+              FOUND=${'$'}(find /data/user -maxdepth 6 -type d -name packcache 2>/dev/null | head -1)
+              if [ -n "${'$'}FOUND" ]; then
+                echo "DIAG|自动定位到: ${'$'}FOUND"
+                PACKCACHE="${'$'}FOUND"
+              fi
+            fi
+
             if [ ! -d "${'$'}PACKCACHE" ]; then
               echo "ERR|找不到游戏目录：${'$'}PACKCACHE"
               echo "DIAG|id: ${'$'}(id 2>&1)"
@@ -239,7 +297,7 @@ class MainActivity : AppCompatActivity() {
               echo "DIAG|ls 目标: ${'$'}(ls -ld "${'$'}PACKCACHE" 2>&1)"
               echo "DIAG|ls 游戏根: ${'$'}(ls -ld /data/user/0/com.netease.x19 2>&1)"
               echo "DIAG|各用户空间: ${'$'}(ls -d /data/user/*/com.netease.x19 2>&1)"
-              echo "DIAG|mount: ${'$'}(mount | grep -m2 ' /data ' 2>&1)"
+              echo "DIAG|data 下含 netease 的目录: ${'$'}(find /data -maxdepth 4 -iname '*netease*' 2>/dev/null | head -5)"
               exit 1
             fi
 
@@ -257,7 +315,7 @@ class MainActivity : AppCompatActivity() {
               COUNT=${'$'}((COUNT+1))
               echo "PROGRESS|${'$'}COUNT|${'$'}TOTAL"
             done
-            echo "OK|已复制到 ${'$'}COUNT 个子目录"
+            echo "OK|已复制到 ${'$'}COUNT 个子目录（${'$'}PACKCACHE）"
         """.trimIndent()
     }
 
@@ -265,7 +323,7 @@ class MainActivity : AppCompatActivity() {
         script: String,
         onProgress: (done: Int, total: Int) -> Unit
     ): List<String> {
-        val process = ProcessBuilder("su", "-c", script).redirectErrorStream(true).start()
+        val process = ProcessBuilder(suCommand(script)).redirectErrorStream(true).start()
 
         val allLines = mutableListOf<String>()
         process.inputStream.bufferedReader().forEachLine { line ->
@@ -283,28 +341,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun shellQuote(value: String): String =
         "'" + value.replace("'", "'\\''") + "'"
-
-    private fun checkRoot() {
-        Thread {
-            val output = try {
-                val process = Runtime.getRuntime().exec(arrayOf("su", "-c", "id"))
-                val text = process.inputStream.bufferedReader().use { it.readText() }.trim()
-                process.waitFor()
-                text
-            } catch (e: Exception) {
-                "异常: ${e.message}"
-            }
-            appendLog("root 检查: $output")
-            val granted = output.contains("uid=0")
-            runOnUiThread {
-                rootStatusText.text = if (granted) {
-                    "Root 权限：已授权 ✅"
-                } else {
-                    "Root 权限：未授权 ❌（复制到游戏目录需要它）"
-                }
-            }
-        }.start()
-    }
 
     private fun queryDisplayName(uri: Uri): String {
         var name = uri.lastPathSegment ?: "unknown.mcp"
