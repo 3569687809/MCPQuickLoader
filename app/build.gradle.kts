@@ -22,8 +22,8 @@ android {
         applicationId = "com.z1yr.mcpquickloader"
         minSdk = 26
         targetSdk = 37
-        versionCode = 4
-        versionName = "1.0.0-Debug3"
+        versionCode = 5
+        versionName = "1.1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
