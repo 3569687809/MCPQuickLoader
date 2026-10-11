@@ -213,7 +213,14 @@ class MainActivity : AppCompatActivity() {
 
     private fun fail(message: String): String {
         appendLog("--- 结果 ---\n$message")
-        return "$message\n\n详细日志：\n${logFile.absolutePath}"
+        // 把 shell 的诊断行直接摆到界面上，用户截个图就能反馈
+        val diag = try {
+            logFile.readLines().filter { it.startsWith("DIAG|") }.takeLast(6)
+        } catch (_: Exception) {
+            emptyList()
+        }
+        val extra = if (diag.isEmpty()) "" else "\n\n" + diag.joinToString("\n") { it.removePrefix("DIAG|") }
+        return "$message$extra\n\n完整日志：\n${logFile.absolutePath}"
     }
 
     // 要 root；chown / chmod / restorecon 缺一不可，否则游戏读不到
